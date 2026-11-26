@@ -1,25 +1,25 @@
 # Dual Boot
 
-Root-приложение для управления и переключения систем через **Android Dynamic System Updates (DSU)** с интерфейсом в стиле **HyperOS 4 Glass** на базе **Miuix Compose**.
+A root Android application for managing and switching operating systems via **Android Dynamic System Updates (DSU)**, featuring a **HyperOS 4 Glass** UI powered by **Miuix Compose**.
 
-## Возможности
+## Features
 
-- **Переключение ОС**: выбор активного слота (Primary OS / Secondary DSU) и перезагрузка в один тап (`IDynamicSystemService.setEnable` + `reboot`).
-- **Потоковая установка прошивок**: установка `.img`, `.xz`, `.gz`/`.gzip` и `.zip` (DSU-пакетов) напрямую через `SharedMemory` / ashmem без ручной подготовки через ADB.
-- **Управление DSU-слотом**: просмотр установленных систем, удаление DSU (`Discard DSU`), контроль занятого места в `/data/gsi/dsu` и настройка размера `userdata` (в ГБ).
-- **Диагностика окружения**: проверка root-доступа (`uid=0`), подключения к `IDynamicSystemService` и поддержки динамических разделов (`ro.boot.dynamic_partitions`).
-- **Miuix Glass UI**: `GlassTopAppBar` с `progressiveBlur`, `GlassNavigationBar`, `GlassDialog`, `PressFeedbackType.Sink` и переключение темы (`System` / `Dark` / `Light`).
+- **OS Switching**: Select the active slot (Primary OS / Secondary DSU) and reboot in one tap (`IDynamicSystemService.setEnable` + `reboot`).
+- **Streaming Firmware Installation**: Install `.img`, `.xz`, `.gz`/`.gzip`, and `.zip` (DSU package) files directly via `SharedMemory` / ashmem without manual ADB preparation.
+- **DSU Slot Management**: Inspect installed systems, discard the DSU slot (`Discard DSU`), monitor space used in `/data/gsi/dsu`, and configure `userdata` allocation size (in GB).
+- **Environment Diagnostics**: Verify root access (`uid=0`), `IDynamicSystemService` binding status, and dynamic partition support (`ro.boot.dynamic_partitions`).
+- **Miuix Glass UI**: `GlassTopAppBar` with `progressiveBlur`, `GlassNavigationBar`, `GlassDialog`, `PressFeedbackType.Sink`, and theme switching (`System` / `Dark` / `Light`).
 
-## Требования
+## Requirements
 
 - Android 10+ (`minSdk = 29`)
-- Поддержка динамических разделов (`ro.boot.dynamic_partitions = true`)
-- **Root-доступ** (Magisk / KernelSU / APatch) — требуется для доступа к `MANAGE_DYNAMIC_SYSTEM` через `libsu` `RootService`
-- Разблокированный загрузчик
+- Dynamic partitions support (`ro.boot.dynamic_partitions = true`)
+- **Root access** (Magisk / KernelSU / APatch) — required for `MANAGE_DYNAMIC_SYSTEM` via `libsu` `RootService`
+- Unlocked bootloader
 
-## Сборка (WSL)
+## Building (WSL)
 
-Проект использует `compileSdk = 37.2` (требуется для `miuix-glass:0.9.5-rc01`) и собирается в WSL:
+The project targets `compileSdk = 37.2` (required by `miuix-glass:0.9.5-rc01`) and builds in WSL:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -27,9 +27,9 @@ export ANDROID_HOME=$HOME/Android/Sdk
 ./gradlew assembleRelease --no-daemon
 ```
 
-Готовый APK: `app/build/outputs/apk/release/app-release.apk`.
+Output APK: `app/build/outputs/apk/release/app-release.apk`.
 
-## Благодарности и лицензия
+## Credits & License
 
-- Движок DSU и привилегированный root-сервис основаны на [VegaBobo/DSU-Sideloader](https://github.com/VegaBobo/DSU-Sideloader) (Apache-2.0).
-- Интерфейс построен на [compose-miuix-ui/miuix](https://github.com/compose-miuix-ui/miuix) (Apache-2.0).
+- DSU engine and privileged root service are based on [VegaBobo/DSU-Sideloader](https://github.com/VegaBobo/DSU-Sideloader) (Apache-2.0).
+- UI built with [compose-miuix-ui/miuix](https://github.com/compose-miuix-ui/miuix) (Apache-2.0).
