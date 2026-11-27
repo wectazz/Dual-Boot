@@ -1,6 +1,13 @@
 package com.dualboot.dsu.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +76,8 @@ import top.yukonga.miuix.kmp.icon.glass.HomeOutline
 import top.yukonga.miuix.kmp.icon.glass.SettingsOutline
 import top.yukonga.miuix.kmp.material.isRuntimeShaderSupported
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.RadioButtonPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import kotlin.math.roundToInt
@@ -99,6 +108,7 @@ fun DualBootScreen(
     onConfirmReboot: () -> Unit,
     onRefreshStatus: () -> Unit,
     onCycleTheme: () -> Unit,
+    onToggleBuiltinInstaller: (Boolean) -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
@@ -153,12 +163,14 @@ fun DualBootScreen(
                         onOpenModal = onOpenModal,
                         onCancelInstall = onCancelInstall,
                         onDismissStatusCard = onDismissStatusCard,
+                        onDiscardDsu = onDiscardDsu,
                     )
                     1 -> SettingsTab(
                         state = state,
                         bottomPadding = navBarBottomPadding,
                         onRefreshStatus = onRefreshStatus,
                         onCycleTheme = onCycleTheme,
+                        onToggleBuiltinInstaller = onToggleBuiltinInstaller,
                     )
                 }
             }
@@ -406,6 +418,7 @@ private fun DualBootHomeTab(
     onOpenModal: (ActiveModal) -> Unit,
     onCancelInstall: () -> Unit,
     onDismissStatusCard: () -> Unit,
+    onDiscardDsu: () -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val listState = rememberLazyListState()
@@ -458,34 +471,20 @@ private fun DualBootHomeTab(
                     pressFeedbackType = PressFeedbackType.Sink,
                 ) {
                     val activeOs = if (state.isDsuInUse) state.secondaryOs else state.primaryOs
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_phone),
-                            contentDescription = null,
-                            tint = accentBlue,
-                            modifier = Modifier.size(26.dp),
-                        )
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = activeOs.name,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = textPrimary,
+                    BasicComponent(
+                        title = activeOs.name,
+                        summary = "${activeOs.versionLine}  ·  Currently running",
+                        startAction = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_phone),
+                                contentDescription = null,
+                                tint = accentBlue,
+                                modifier = Modifier
+                                    .padding(end = 14.dp)
+                                    .size(26.dp),
                             )
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Text(
-                                text = "${activeOs.versionLine}  ·  Currently running",
-                                fontSize = 13.sp,
-                                color = textSecondary,
-                            )
-                        }
-                    }
+                        },
+                    )
                 }
                 Spacer(modifier = Modifier.height(18.dp))
             }
@@ -499,18 +498,14 @@ private fun DualBootHomeTab(
                     val primarySelected = state.selectedSlot == OsSlot.PRIMARY
                     val secondarySelected = state.selectedSlot == OsSlot.SECONDARY
 
-                    OsSlotRow(
+                    RadioButtonPreference(
                         title = state.primaryOs.name,
-                        versionLine = state.primaryOs.versionLine,
-                        statusLine = if (!state.isDsuInUse) {
+                        summary = "${state.primaryOs.versionLine}\n" + if (!state.isDsuInUse) {
                             "Primary system  ·  Currently running"
                         } else {
                             "Primary system  ·  Ready to boot"
                         },
                         selected = primarySelected,
-                        accentColor = accentBlue,
-                        textPrimary = textPrimary,
-                        textSecondary = textSecondary,
                         onClick = { onSelectSlot(OsSlot.PRIMARY) },
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -519,14 +514,10 @@ private fun DualBootHomeTab(
                         state.isDsuInstalled -> "Secondary system  ·  Ready to boot"
                         else -> "Secondary system  ·  Not installed"
                     }
-                    OsSlotRow(
+                    RadioButtonPreference(
                         title = state.secondaryOs.name,
-                        versionLine = state.secondaryOs.versionLine,
-                        statusLine = secondaryStatus,
+                        summary = "${state.secondaryOs.versionLine}\n$secondaryStatus",
                         selected = secondarySelected,
-                        accentColor = accentBlue,
-                        textPrimary = textPrimary,
-                        textSecondary = textSecondary,
                         onClick = { onSelectSlot(OsSlot.SECONDARY) },
                     )
                 }
@@ -576,17 +567,26 @@ private fun DualBootHomeTab(
                 )
             }
 
-            if (state.installationStep != InstallationStep.IDLE) {
-                item {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    InstallationStatusCard(
-                        state = state,
-                        accentBlue = accentBlue,
-                        textPrimary = textPrimary,
-                        textSecondary = textSecondary,
-                        onCancel = onCancelInstall,
-                        onDismiss = onDismissStatusCard,
-                    )
+            item {
+                val showStatusCard = state.installationStep != InstallationStep.IDLE ||
+                    (state.isDsuInstalled && !state.isDsuInUse)
+                AnimatedVisibility(
+                    visible = showStatusCard,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        InstallationStatusCard(
+                            state = state,
+                            accentBlue = accentBlue,
+                            textPrimary = textPrimary,
+                            textSecondary = textSecondary,
+                            onCancel = onCancelInstall,
+                            onDismiss = onDismissStatusCard,
+                            onDiscard = onDiscardDsu,
+                        )
+                    }
                 }
             }
 
@@ -672,6 +672,7 @@ private fun SettingsTab(
     bottomPadding: Dp,
     onRefreshStatus: () -> Unit,
     onCycleTheme: () -> Unit,
+    onToggleBuiltinInstaller: (Boolean) -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val listState = rememberLazyListState()
@@ -744,6 +745,26 @@ private fun SettingsTab(
 
             item {
                 SmallTitle(
+                    text = "Installer",
+                    insideMargin = PaddingValues(start = 4.dp, bottom = 8.dp),
+                )
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    SwitchPreference(
+                        title = "Built-in DSU installer",
+                        summary = if (state.useBuiltinInstaller) {
+                            "Use built-in root installer with in-app progress"
+                        } else {
+                            "Forward installation to system DSU (com.android.dynsystem)"
+                        },
+                        checked = state.useBuiltinInstaller,
+                        onCheckedChange = onToggleBuiltinInstaller,
+                    )
+                }
+                Spacer(modifier = Modifier.height(18.dp))
+            }
+
+            item {
+                SmallTitle(
                     text = "Appearance",
                     insideMargin = PaddingValues(start = 4.dp, bottom = 8.dp),
                 )
@@ -763,9 +784,10 @@ private fun SettingsTab(
                     insideMargin = PaddingValues(start = 4.dp, bottom = 8.dp),
                 )
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    BasicComponent(
-                        title = "Dual Boot",
-                        summary = "Root DSU manager · v1.0.0",
+                    ArrowPreference(
+                        title = "wectazz",
+                        summary = "Developer · github.com/wectazz",
+                        onClick = { uriHandler.openUri("https://github.com/wectazz") },
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     ArrowPreference(
@@ -806,55 +828,6 @@ private fun SettingsTab(
 }
 
 @Composable
-private fun OsSlotRow(
-    title: String,
-    versionLine: String,
-    statusLine: String,
-    selected: Boolean,
-    accentColor: Color,
-    textPrimary: Color,
-    textSecondary: Color,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (selected) accentColor else textPrimary,
-            )
-            Spacer(modifier = Modifier.height(3.dp))
-            Text(
-                text = versionLine,
-                fontSize = 13.sp,
-                color = if (selected) accentColor.copy(alpha = 0.85f) else textSecondary,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = statusLine,
-                fontSize = 13.sp,
-                color = if (selected) accentColor.copy(alpha = 0.85f) else textSecondary,
-            )
-        }
-        if (selected) {
-            Icon(
-                painter = painterResource(R.drawable.ic_check),
-                contentDescription = "Selected",
-                tint = accentColor,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-    }
-}
-
-@Composable
 private fun InstallationStatusCard(
     state: DualBootUiState,
     accentBlue: Color,
@@ -862,13 +835,33 @@ private fun InstallationStatusCard(
     textSecondary: Color,
     onCancel: () -> Unit,
     onDismiss: () -> Unit,
+    onDiscard: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            val title = when (state.installationStep) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .animateContentSize(),
+        ) {
+            val effectiveStep = if (
+                state.installationStep == InstallationStep.IDLE &&
+                state.isDsuInstalled &&
+                !state.isDsuInUse
+            ) {
+                InstallationStep.SUCCESS
+            } else {
+                state.installationStep
+            }
+            val title = when (effectiveStep) {
                 InstallationStep.DECOMPRESSING -> "Decompressing ${state.installDetail}..."
                 InstallationStep.CREATING_PARTITION -> "Creating ${state.installDetail} partition..."
-                InstallationStep.INSTALLING -> "Installing ${state.installDetail}..."
+                InstallationStep.INSTALLING -> {
+                    if (state.installDetail.startsWith("Install", ignoreCase = true)) {
+                        state.installDetail
+                    } else {
+                        "Installing ${state.installDetail}..."
+                    }
+                }
                 InstallationStep.FINISHING -> "Finalizing DSU slot..."
                 InstallationStep.SUCCESS -> "DSU installed successfully"
                 InstallationStep.ERROR -> "Installation failed"
@@ -878,10 +871,10 @@ private fun InstallationStatusCard(
                 text = title,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = if (state.installationStep == InstallationStep.ERROR) Color(0xFFFF453A) else textPrimary,
+                color = if (effectiveStep == InstallationStep.ERROR) Color(0xFFFF453A) else textPrimary,
             )
             Spacer(modifier = Modifier.height(8.dp))
-            if (state.installationStep == InstallationStep.ERROR) {
+            if (effectiveStep == InstallationStep.ERROR) {
                 Text(
                     text = state.errorMessage ?: "Unknown error",
                     fontSize = 13.sp,
@@ -891,15 +884,18 @@ private fun InstallationStatusCard(
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Dismiss")
                 }
-            } else if (state.installationStep == InstallationStep.SUCCESS) {
+            } else if (effectiveStep == InstallationStep.SUCCESS) {
                 Text(
                     text = "Ready to boot. Tap REBOOT NOW above to switch into DSU.",
                     fontSize = 13.sp,
                     color = accentBlue,
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                    Text("OK")
+                Button(
+                    onClick = onDiscard,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Discard", color = Color(0xFFFF453A))
                 }
             } else {
                 LinearProgressIndicator(
@@ -907,22 +903,19 @@ private fun InstallationStatusCard(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(
+                Text(
+                    text = "${(state.installProgress * 100).toInt()}%",
+                    fontSize = 12.sp,
+                    color = textSecondary,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onCancel,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "${(state.installProgress * 100).toInt()}%",
-                        fontSize = 12.sp,
-                        color = textSecondary,
-                    )
-                    Text(
                         text = "Cancel",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
                         color = Color(0xFFFF453A),
-                        modifier = Modifier.clickable(onClick = onCancel),
                     )
                 }
             }

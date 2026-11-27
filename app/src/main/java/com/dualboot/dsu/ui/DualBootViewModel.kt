@@ -1,6 +1,8 @@
 package com.dualboot.dsu.ui
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +17,8 @@ import com.dualboot.dsu.util.SystemInfoUtils
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,11 +69,17 @@ data class DualBootUiState(
     val selectedFileName: String = "",
     val selectedFileSize: Long = -1L,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val useBuiltinInstaller: Boolean = true,
 )
 
 class DualBootViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _uiState = MutableStateFlow(DualBootUiState())
+    private val prefs = application.getSharedPreferences("dualboot_prefs", Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(
+        DualBootUiState(
+            useBuiltinInstaller = prefs.getBoolean("use_builtin_installer", true),
+        )
+    )
     val uiState: StateFlow<DualBootUiState> = _uiState.asStateFlow()
 
     private var installJob: Job? = null
@@ -135,6 +145,11 @@ class DualBootViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setUseBuiltinInstaller(enabled: Boolean) {
+        prefs.edit().putBoolean("use_builtin_installer", enabled).apply()
+        _uiState.update { it.copy(useBuiltinInstaller = enabled) }
+    }
+
     fun cycleThemeMode() {
         _uiState.update { state ->
             val next = when (state.themeMode) {
@@ -176,9 +191,14 @@ class DualBootViewModel(application: Application) : AndroidViewModel(application
         val uri = state.selectedFileUri ?: return
         dismissModal()
 
+        val userdataBytes = state.userdataGb.toLong() * 1024L * 1024L * 1024L
+        if (!state.useBuiltinInstaller) {
+            startSystemDsuInstaller(uri, state.selectedFileSize, userdataBytes)
+            return
+        }
+
         val job = Job()
         installJob = job
-        val userdataBytes = state.userdataGb.toLong() * 1024L * 1024L * 1024L
 
         _uiState.update {
             it.copy(
@@ -237,12 +257,205 @@ class DualBootViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private fun startSystemDsuInstaller(uri: Uri, fileSize: Long, userdataBytes: Long) {
+        val job = Job()
+        installJob = job
+        viewModelScope.launch(Dispatchers.IO + job) {
+            runCatching {
+                val ctx = getApplication<Application>()
+                ctx.grantUriPermission(
+                    "com.android.dynsystem",
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+                val service = PrivilegedProvider.getService()
+                val wasInstalled = runCatching { service.isInstalled }.getOrDefault(false)
+                service.setDynProp()
+                val intent = Intent("android.os.image.action.START_INSTALL").apply {
+                    setClassName("com.android.dynsystem", "com.android.dynsystem.VerificationActivity")
+                    data = uri
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra("KEY_USERDATA_SIZE", userdataBytes)
+                    if (fileSize > 0L) {
+                        putExtra("KEY_SYSTEM_SIZE", fileSize)
+                    }
+                    putExtra("KEY_ENABLE_WHEN_COMPLETED", false)
+                }
+                service.startActivity(intent)
+
+                _uiState.update {
+                    it.copy(
+                        installationStep = InstallationStep.INSTALLING,
+                        installProgress = 0f,
+                        installDetail = "system DSU",
+                        errorMessage = null,
+                    )
+                }
+
+                var sawWorking = false
+                var idleTicks = 0
+                var postWorkIdleTicks = 0
+                while (isActive) {
+                    delay(400)
+                    val installed = runCatching { service.isInstalled }.getOrDefault(false)
+                    if (installed && (!wasInstalled || sawWorking)) {
+                        _uiState.update {
+                            it.copy(
+                                installationStep = InstallationStep.SUCCESS,
+                                installProgress = 1f,
+                                isDsuInstalled = true,
+                                selectedSlot = OsSlot.SECONDARY,
+                            )
+                        }
+                        refreshStatus()
+                        break
+                    }
+
+                    val notif = readSystemDsuNotificationProgress()
+                    if (notif != null) {
+                        sawWorking = true
+                        idleTicks = 0
+                        postWorkIdleTicks = 0
+                        _uiState.update {
+                            it.copy(
+                                installationStep = InstallationStep.INSTALLING,
+                                installProgress = notif.fraction,
+                                installDetail = notif.detail,
+                            )
+                        }
+                        continue
+                    }
+
+                    val prog = runCatching { service.installationProgress }.getOrNull()
+                    val status = prog?.status ?: 0
+
+                    when {
+                        status == 1 -> {
+                            sawWorking = true
+                            idleTicks = 0
+                            postWorkIdleTicks = 0
+                            val fraction = if (prog != null && prog.total_bytes > 0L) {
+                                (prog.bytes_processed.toFloat() / prog.total_bytes.toFloat()).coerceIn(0f, 1f)
+                            } else {
+                                0f
+                            }
+                            val detail = prog?.step?.takeIf { it.isNotBlank() } ?: "system DSU"
+                            _uiState.update {
+                                it.copy(
+                                    installationStep = InstallationStep.INSTALLING,
+                                    installProgress = fraction,
+                                    installDetail = detail,
+                                )
+                            }
+                        }
+                        status == 2 -> {
+                            // Partition step completed; wait for next partition or isInstalled == true
+                            sawWorking = true
+                            idleTicks = 0
+                            postWorkIdleTicks = 0
+                        }
+                        sawWorking && status == 0 -> {
+                            val serviceAlive = isSystemDsuServiceAlive()
+                            if (serviceAlive) {
+                                postWorkIdleTicks = 0
+                            } else {
+                                postWorkIdleTicks++
+                                if (postWorkIdleTicks >= 8) {
+                                    _uiState.update {
+                                        it.copy(
+                                            installationStep = InstallationStep.ERROR,
+                                            errorMessage = "System DSU installation cancelled or failed",
+                                        )
+                                    }
+                                    refreshStatus()
+                                    break
+                                }
+                            }
+                        }
+                        else -> {
+                            val serviceAlive = isSystemDsuServiceAlive()
+                            if (serviceAlive) {
+                                idleTicks = 0
+                            } else {
+                                idleTicks++
+                                if (idleTicks >= 150) {
+                                    _uiState.update {
+                                        it.copy(
+                                            installationStep = InstallationStep.IDLE,
+                                            installProgress = 0f,
+                                            installDetail = "",
+                                        )
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        installationStep = InstallationStep.ERROR,
+                        errorMessage = e.message ?: "Failed to launch system DSU installer",
+                    )
+                }
+            }
+        }
+    }
+
+    private data class NotifProgress(
+        val fraction: Float,
+        val detail: String,
+    )
+
+    private fun isSystemDsuServiceAlive(): Boolean {
+        return Shell.cmd("dumpsys activity services com.android.dynsystem")
+            .exec().out.any { "DynamicSystemInstallationService" in it }
+    }
+
+    private fun readSystemDsuNotificationProgress(): NotifProgress? {
+        val res = Shell.cmd("dumpsys notification --noredact").exec()
+        if (!res.isSuccess) return null
+        var inDsuRecord = false
+        var progress: Int? = null
+        var progressMax: Int? = null
+        var text: String? = null
+
+        for (rawLine in res.out) {
+            val line = rawLine.trim()
+            if (line.startsWith("NotificationRecord(")) {
+                if (inDsuRecord) break
+                inDsuRecord = "pkg=com.android.dynsystem" in line
+                continue
+            }
+            if (!inDsuRecord) continue
+            if (line.startsWith("android.progress=")) {
+                progress = Regex("""(\d+)""").find(line.substringAfter('='))?.value?.toIntOrNull()
+            } else if (line.startsWith("android.progressMax=")) {
+                progressMax = Regex("""(\d+)""").find(line.substringAfter('='))?.value?.toIntOrNull()
+            } else if (line.startsWith("android.text=")) {
+                text = line.substringAfter('=')
+                    .removePrefix("String (")
+                    .removeSuffix(")")
+                    .trim()
+            }
+        }
+        val max = progressMax ?: return null
+        val cur = progress ?: return null
+        if (max <= 0) return null
+        val fraction = (cur.toFloat() / max.toFloat()).coerceIn(0f, 1f)
+        val detail = text?.takeIf { it.isNotBlank() } ?: "system DSU"
+        return NotifProgress(fraction, detail)
+    }
+
     fun cancelInstallation() {
         installJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                PrivilegedProvider.getService().abort()
-                PrivilegedProvider.getService().remove()
+                val service = PrivilegedProvider.getService()
+                service.abort()
+                service.remove()
+                service.forceStopPackage("com.android.dynsystem")
             }
             _uiState.update {
                 it.copy(
@@ -278,6 +491,9 @@ class DualBootViewModel(application: Application) : AndroidViewModel(application
                         isDsuInstalled = false,
                         isDsuEnabled = false,
                         selectedSlot = OsSlot.PRIMARY,
+                        installationStep = InstallationStep.IDLE,
+                        installProgress = 0f,
+                        installDetail = "",
                     )
                 }
                 refreshStatus()

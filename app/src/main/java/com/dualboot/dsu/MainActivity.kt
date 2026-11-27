@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
                     onConfirmReboot = viewModel::rebootIntoSelected,
                     onRefreshStatus = viewModel::refreshStatus,
                     onCycleTheme = viewModel::cycleThemeMode,
+                    onToggleBuiltinInstaller = viewModel::setUseBuiltinInstaller,
                 )
             }
         }
