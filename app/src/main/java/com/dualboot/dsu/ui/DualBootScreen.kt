@@ -525,10 +525,16 @@ private fun DualBootHomeTab(
             }
 
             item {
+                val isInstalling = state.installationStep in setOf(
+                    InstallationStep.DECOMPRESSING,
+                    InstallationStep.CREATING_PARTITION,
+                    InstallationStep.INSTALLING,
+                    InstallationStep.FINISHING,
+                )
                 val canReboot = state.isRootGranted &&
                     state.isPrivilegedConnected &&
                     (state.selectedSlot == OsSlot.PRIMARY || state.isDsuInstalled) &&
-                    state.installationStep == InstallationStep.IDLE
+                    !isInstalling
 
                 Button(
                     onClick = onRebootClick,
